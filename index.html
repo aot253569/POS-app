@@ -85,6 +85,7 @@ function App() {
   const [cart, setCart] = useState([]);
   const [query, setQuery] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [payType, setPayType] = useState("cash"); // 'cash' หรือ 'credit'
   const [cashInput, setCashInput] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [lastReceipt, setLastReceipt] = useState(null);
@@ -156,16 +157,22 @@ function App() {
     if (exact) { addToCart(exact); setQuery(""); }
   }
 
-  function openCheckout() { if (cart.length === 0) return; setCashInput(""); setCustomerName(""); setCheckoutOpen(true); }
+  function openCheckout() { if (cart.length === 0) return; setPayType("cash"); setCashInput(""); setCustomerName(""); setCheckoutOpen(true); }
 
   function confirmCheckout() {
-    const cash = parseFloat(cashInput);
-    if (isNaN(cash) || cash < cartTotal) return showToast("จำนวนเงินไม่พอ");
+    if (payType === "credit" && !customerName.trim()) {
+      return showToast("ระบุชื่อลูกค้าสำหรับลงบัญชีเงินเซ็น");
+    }
+    const cash = payType === "cash" ? parseFloat(cashInput) : 0;
+    if (payType === "cash" && (isNaN(cash) || cash < cartTotal)) return showToast("จำนวนเงินไม่พอ");
+
     const sale = {
       id: uid("s"), timestamp: Date.now(), customerName: customerName.trim(),
+      payType: payType, // 'cash' หรือ 'credit'
+      status: payType === "credit" ? "unpaid" : "paid", // 'paid' หรือ 'unpaid'
       items: cart.map((i) => ({ id: i.id, name: i.name, price: i.price, cost: i.cost || 0, qty: i.qty, unit: i.unit, category: i.category || "อื่นๆ" })),
       total: cartTotal, profit: cart.reduce((sum, i) => sum + (i.price - (i.cost || 0)) * i.qty, 0),
-      cash, change: cash - cartTotal,
+      cash: payType === "cash" ? cash : 0, change: payType === "cash" ? cash - cartTotal : 0,
     };
     setProducts((prev) => prev.map((p) => {
       const item = cart.find((i) => i.id === p.id);
@@ -175,7 +182,19 @@ function App() {
     setLastReceipt(sale);
     setCart([]);
     setCheckoutOpen(false);
-    showToast("ชำระเงินเรียบร้อย");
+    showToast(payType === "cash" ? "ชำระเงินสดเรียบร้อย" : "ลงบัญชีเงินเซ็นเรียบร้อย");
+  }
+
+  function payOffCustomer(customerNameStr) {
+    if (confirm(`ยืนยันการรับชำระหนี้ทั้งหมดของ "${customerNameStr}" ใช่หรือไม่?`)) {
+      setSales((prev) => prev.map((s) => {
+        if (s.customerName === customerNameStr && s.payType === "credit" && s.status === "unpaid") {
+          return { ...s, status: "paid", paidAt: Date.now() };
+        }
+        return s;
+      }));
+      showToast("บันทึกการชำระหนี้เรียบร้อยแล้ว");
+    }
   }
 
   function saveProduct(data) {
@@ -197,8 +216,6 @@ function App() {
 
   const today = Date.now();
   const todaysSales = sales.filter((s) => isSameDay(s.timestamp, today));
-  const todaysTotal = todaysSales.reduce((sum, s) => sum + s.total, 0);
-  const todaysProfit = todaysSales.reduce((sum, s) => sum + (s.profit || 0), 0);
 
   return (
     <div style={styles.app}>
@@ -215,7 +232,7 @@ function App() {
             <TabButton active={tab === "sell"} onClick={() => setTab("sell")} label="ขายสินค้า" />
             <TabButton active={tab === "products"} onClick={() => setTab("products")} label="คลังสินค้า" />
             <TabButton active={tab === "history"} onClick={() => setTab("history")} label="ประวัติการขาย" />
-            <TabButton active={tab === "customers"} onClick={() => setTab("customers")} label="ลูกค้า" />
+            <TabButton active={tab === "customers"} onClick={() => setTab("customers")} label="เงินเซ็น/ลูกค้า" />
           </nav>
           <button onClick={resetAllData} style={styles.resetBtn}>ล้างข้อมูลแอป</button>
         </div>
@@ -288,7 +305,7 @@ function App() {
                 <span style={{ fontSize: 16, fontWeight: 600 }}>ยอดรวม</span>
                 <span className="mono" style={{ fontSize: 22, fontWeight: 600, color: "var(--green-dark)" }}>{CURRENCY(cartTotal)}</span>
               </div>
-              <button onClick={openCheckout} disabled={cart.length === 0} style={{ ...styles.primaryBtn, opacity: cart.length === 0 ? 0.5 : 1 }}>รับชำระเงิน</button>
+              <button onClick={openCheckout} disabled={cart.length === 0} style={{ ...styles.primaryBtn, opacity: cart.length === 0 ? 0.5 : 1 }}>คิดเงิน / ลงบัญชี</button>
             </div>
           </aside>
         </div>
@@ -298,47 +315,62 @@ function App() {
         onAdd={() => setProductModal({ mode: "add", data: { name: "", price: "", cost: "", stock: "", unit: "", barcode: "", category: "", image: "" } })}
         onEdit={(p) => setProductModal({ mode: "edit", data: p })} />}
 
-      {tab === "history" && <HistoryView sales={sales} todaysSales={todaysSales} todaysTotal={todaysTotal} todaysProfit={todaysProfit} onSelect={setHistoryDetail} />}
+      {tab === "history" && <HistoryView sales={sales} todaysSales={todaysSales} onSelect={setHistoryDetail} />}
 
-      {tab === "customers" && <CustomersView sales={sales} />}
+      {tab === "customers" && <CustomersView sales={sales} onPayOff={payOffCustomer} />}
 
       {checkoutOpen && (
-        <Modal onClose={() => setCheckoutOpen(false)} title="รับชำระเงิน">
+        <Modal onClose={() => setCheckoutOpen(false)} title="ชำระเงิน / ลงบัญชี">
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 18 }}>
             <span style={{ fontSize: 15, color: "var(--ink-muted)" }}>ยอดที่ต้องชำระ</span>
             <span className="mono" style={{ fontSize: 24, fontWeight: 600, color: "var(--green-dark)" }}>{CURRENCY(cartTotal)}</span>
           </div>
-          <label style={styles.fieldLabel}>ชื่อลูกค้า (ไม่บังคับ)</label>
-          <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="เช่น คุณสมชาย หรือเว้นว่างไว้" style={styles.modalInput} />
-          <label style={styles.fieldLabel}>รับเงินสดมา (บาท)</label>
-          <input autoFocus type="number" value={cashInput} onChange={(e) => setCashInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && confirmCheckout()} placeholder="0.00" style={styles.modalInput} />
-          <div style={styles.quickCash}>
-            {[cartTotal, Math.ceil(cartTotal / 20) * 20, Math.ceil(cartTotal / 100) * 100, Math.ceil(cartTotal / 500) * 500]
-              .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i).slice(0, 4)
-              .map((v) => <button key={v} onClick={() => setCashInput(String(v))} style={styles.chip}>{CURRENCY(v)}</button>)}
+
+          <label style={styles.fieldLabel}>ประเภทการชำระเงิน</label>
+          <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+            <button onClick={() => setPayType("cash")} style={{ flex: 1, padding: "10px", borderRadius: 8, border: payType === "cash" ? "2px solid var(--green)" : "1px solid var(--line)", background: payType === "cash" ? "var(--green-light)" : "#fff", fontWeight: 600, color: payType === "cash" ? "var(--green-dark)" : "var(--ink)" }}>💵 เงินสด</button>
+            <button onClick={() => setPayType("credit")} style={{ flex: 1, padding: "10px", borderRadius: 8, border: payType === "credit" ? "2px solid var(--amber)" : "1px solid var(--line)", background: payType === "credit" ? "var(--amber-light)" : "#fff", fontWeight: 600, color: payType === "credit" ? "var(--amber)" : "var(--ink)" }}>📝 เงินเซ็น (ลงบัญชี)</button>
           </div>
-          {cashInput && !isNaN(parseFloat(cashInput)) && (
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, paddingTop: 16, borderTop: "0.5px dashed var(--line)" }}>
-              <span style={{ fontSize: 14, color: "var(--ink-muted)" }}>เงินทอน</span>
-              <span className="mono" style={{ fontSize: 18, fontWeight: 600, color: parseFloat(cashInput) < cartTotal ? "var(--danger)" : "var(--ink)" }}>
-                {parseFloat(cashInput) >= cartTotal ? CURRENCY(parseFloat(cashInput) - cartTotal) : "ไม่พอ"}
-              </span>
-            </div>
+
+          <label style={styles.fieldLabel}>ชื่อลูกค้า {payType === "credit" && <span style={{ color: "var(--danger)" }}>*จำจำเป็นต้องใส่</span>}</label>
+          <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder={payType === "credit" ? "ระบุชื่อลูกค้า เช่น คุณสมชาย" : "ระบุชื่อลูกค้า (ไม่บังคับ)"} style={styles.modalInput} />
+
+          {payType === "cash" && (
+            <>
+              <label style={styles.fieldLabel}>รับเงินสดมา (บาท)</label>
+              <input autoFocus type="number" value={cashInput} onChange={(e) => setCashInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && confirmCheckout()} placeholder="0.00" style={styles.modalInput} />
+              <div style={styles.quickCash}>
+                {[cartTotal, Math.ceil(cartTotal / 20) * 20, Math.ceil(cartTotal / 100) * 100, Math.ceil(cartTotal / 500) * 500]
+                  .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i).slice(0, 4)
+                  .map((v) => <button key={v} onClick={() => setCashInput(String(v))} style={styles.chip}>{CURRENCY(v)}</button>)}
+              </div>
+              {cashInput && !isNaN(parseFloat(cashInput)) && (
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, paddingTop: 16, borderTop: "0.5px dashed var(--line)" }}>
+                  <span style={{ fontSize: 14, color: "var(--ink-muted)" }}>เงินทอน</span>
+                  <span className="mono" style={{ fontSize: 18, fontWeight: 600, color: parseFloat(cashInput) < cartTotal ? "var(--danger)" : "var(--ink)" }}>
+                    {parseFloat(cashInput) >= cartTotal ? CURRENCY(parseFloat(cashInput) - cartTotal) : "ไม่พอ"}
+                  </span>
+                </div>
+              )}
+            </>
           )}
-          <button onClick={confirmCheckout} style={{ ...styles.primaryBtn, marginTop: 20 }}>ยืนยันการชำระเงิน</button>
+
+          <button onClick={confirmCheckout} style={{ ...styles.primaryBtn, marginTop: 20, background: payType === "credit" ? "var(--amber)" : "var(--green)" }}>
+            {payType === "cash" ? "ยืนยันรับเงินสด" : "บันทึกยอดเงินเซ็น"}
+          </button>
         </Modal>
       )}
 
       {lastReceipt && (
-        <Modal onClose={() => setLastReceipt(null)} title="ใบเสร็จ">
+        <Modal onClose={() => setLastReceipt(null)} title="ใบเสร็จ / สลิปบันทึก">
           <ReceiptView sale={lastReceipt} />
           <button onClick={() => setLastReceipt(null)} style={{ ...styles.primaryBtn, marginTop: 16 }}>เสร็จสิ้น</button>
         </Modal>
       )}
 
       {historyDetail && (
-        <Modal onClose={() => setHistoryDetail(null)} title="รายละเอียดใบเสร็จ">
+        <Modal onClose={() => setHistoryDetail(null)} title="รายละเอียดรายการ">
           <ReceiptView sale={historyDetail} />
           <button onClick={() => setHistoryDetail(null)} style={{ ...styles.primaryBtn, marginTop: 16 }}>ปิด</button>
         </Modal>
@@ -408,86 +440,22 @@ function ProductsView({ products, onAdd, onEdit }) {
   );
 }
 
-function CategoryPieChart({ sales }) {
-  const categoryMap = {};
-  let totalRevenue = 0;
-
-  sales.forEach((s) => {
-    s.items.forEach((it) => {
-      const cat = it.category || "อื่นๆ";
-      const revenue = (it.price || 0) * (it.qty || 0);
-      categoryMap[cat] = (categoryMap[cat] || 0) + revenue;
-      totalRevenue += revenue;
-    });
-  });
-
-  const categories = Object.keys(categoryMap).map((cat, idx) => {
-    const value = categoryMap[cat];
-    const percent = totalRevenue > 0 ? (value / totalRevenue) * 100 : 0;
-    return { name: cat, value, percent, color: CATEGORY_COLORS[idx % CATEGORY_COLORS.length] };
-  }).sort((a, b) => b.value - a.value);
-
-  if (totalRevenue === 0 || categories.length === 0) {
-    return <div style={{ textAlign: "center", color: "var(--ink-muted)", fontSize: 13, padding: "20px 0" }}>ไม่มีข้อมูลการขายในเดือนนี้</div>;
-  }
-
-  let accumulatedPercent = 0;
-  const slices = categories.map((cat) => {
-    const startAngle = (accumulatedPercent / 100) * 360;
-    accumulatedPercent += cat.percent;
-    const endAngle = (accumulatedPercent / 100) * 360;
-    return { ...cat, startAngle, endAngle };
-  });
-
-  function getCoordinates(angle) {
-    const rad = ((angle - 90) * Math.PI) / 180;
-    return { x: 100 + 80 * Math.cos(rad), y: 100 + 80 * Math.sin(rad) };
-  }
-
-  return (
-    <div style={styles.chartContainer}>
-      <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 16 }}>สัดส่วนยอดขายตามหมวดหมู่ (%)</div>
-      <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
-        <svg width="180" height="180" viewBox="0 0 200 200" style={{ transform: "rotate(0deg)", flexShrink: 0 }}>
-          {slices.map((slice, i) => {
-            if (slice.percent >= 99.99) {
-              return <circle key={i} cx="100" cy="100" r="80" fill="none" stroke={slice.color} strokeWidth="36" />;
-            }
-            const start = getCoordinates(slice.startAngle);
-            const end = getCoordinates(slice.endAngle);
-            const largeArcFlag = slice.endAngle - slice.startAngle > 180 ? 1 : 0;
-            const pathData = `M ${start.x} ${start.y} A 80 80 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
-            return (
-              <path key={i} d={pathData} fill="none" stroke={slice.color} strokeWidth="36" />
-            );
-          })}
-        </svg>
-
-        <div style={{ flex: 1, minWidth: 180 }}>
-          {categories.map((c) => (
-            <div key={c.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, fontSize: 13 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ width: 12, height: 12, borderRadius: 3, background: c.color, display: "inline-block" }}></span>
-                <span>{c.name}</span>
-              </div>
-              <div className="mono" style={{ fontWeight: 600 }}>{c.percent.toFixed(1)}%</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function HistoryView({ sales, todaysSales, todaysTotal, todaysProfit, onSelect }) {
+function HistoryView({ sales, todaysSales, onSelect }) {
   const now = new Date();
   const [viewMonth, setViewMonth] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
+  
   const monthSales = sales.filter((s) => {
     const d = new Date(s.timestamp);
     return d.getFullYear() === viewMonth.getFullYear() && d.getMonth() === viewMonth.getMonth();
   });
-  const monthTotal = monthSales.reduce((sum, s) => sum + s.total, 0);
-  const monthProfit = monthSales.reduce((sum, s) => sum + (s.profit || 0), 0);
+
+  const monthCash = monthSales.filter(s => s.payType === 'cash' || (s.payType === 'credit' && s.status === 'paid')).reduce((sum, s) => sum + s.total, 0);
+  const monthCredit = monthSales.filter(s => s.payType === 'credit' && s.status === 'unpaid').reduce((sum, s) => sum + s.total, 0);
+  const monthTotal = monthCash + monthCredit;
+
+  const todayCash = todaysSales.filter(s => s.payType === 'cash' || (s.payType === 'credit' && s.status === 'paid')).reduce((sum, s) => sum + s.total, 0);
+  const todayCredit = todaysSales.filter(s => s.payType === 'credit' && s.status === 'unpaid').reduce((sum, s) => sum + s.total, 0);
+
   const isCurrentMonth = viewMonth.getFullYear() === now.getFullYear() && viewMonth.getMonth() === now.getMonth();
   const monthLabel = viewMonth.toLocaleDateString("th-TH", { month: "long", year: "numeric" });
   function shiftMonth(delta) { setViewMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1)); }
@@ -495,9 +463,9 @@ function HistoryView({ sales, todaysSales, todaysTotal, todaysProfit, onSelect }
   return (
     <div style={{ padding: "20px 28px 40px" }}>
       <div style={styles.summaryRow}>
-        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>ยอดขายวันนี้</div><div className="mono" style={{ fontSize: 24, fontWeight: 600, color: "var(--green-dark)", marginTop: 4 }}>{CURRENCY(todaysTotal)}</div></div>
-        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>กำไรวันนี้</div><div className="mono" style={{ fontSize: 24, fontWeight: 600, color: "var(--amber)", marginTop: 4 }}>{CURRENCY(todaysProfit)}</div></div>
-        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>บิลวันนี้</div><div className="mono" style={{ fontSize: 24, fontWeight: 600, marginTop: 4 }}>{todaysSales.length}</div></div>
+        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>สดวันนี้</div><div className="mono" style={{ fontSize: 20, fontWeight: 600, color: "var(--green-dark)", marginTop: 4 }}>{CURRENCY(todayCash)}</div></div>
+        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>เซ็นวันนี้</div><div className="mono" style={{ fontSize: 20, fontWeight: 600, color: "var(--amber)", marginTop: 4 }}>{CURRENCY(todayCredit)}</div></div>
+        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>รวมวันนี้</div><div className="mono" style={{ fontSize: 20, fontWeight: 600, marginTop: 4 }}>{CURRENCY(todayCash + todayCredit)}</div></div>
       </div>
 
       <div style={styles.monthNav}>
@@ -506,27 +474,34 @@ function HistoryView({ sales, todaysSales, todaysTotal, todaysProfit, onSelect }
         <button onClick={() => shiftMonth(1)} disabled={isCurrentMonth} style={{ ...styles.monthNavBtn, opacity: isCurrentMonth ? 0.35 : 1 }} aria-label="เดือนถัดไป">›</button>
       </div>
       <div style={{ ...styles.summaryRow, maxWidth: 640, marginTop: 10 }}>
-        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>ยอดขายเดือนนี้</div><div className="mono" style={{ fontSize: 22, fontWeight: 600, color: "var(--green-dark)", marginTop: 4 }}>{CURRENCY(monthTotal)}</div></div>
-        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>กำไรเดือนนี้</div><div className="mono" style={{ fontSize: 22, fontWeight: 600, color: "var(--amber)", marginTop: 4 }}>{CURRENCY(monthProfit)}</div></div>
-        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>บิลในเดือนนี้</div><div className="mono" style={{ fontSize: 22, fontWeight: 600, marginTop: 4 }}>{monthSales.length}</div></div>
+        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>เงินสดเดือนนี้</div><div className="mono" style={{ fontSize: 20, fontWeight: 600, color: "var(--green-dark)", marginTop: 4 }}>{CURRENCY(monthCash)}</div></div>
+        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>เงินเซ็นเดือนนี้</div><div className="mono" style={{ fontSize: 20, fontWeight: 600, color: "var(--amber)", marginTop: 4 }}>{CURRENCY(monthCredit)}</div></div>
+        <div style={styles.summaryCard}><div style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>ยอดขายรวม</div><div className="mono" style={{ fontSize: 20, fontWeight: 600, marginTop: 4 }}>{CURRENCY(monthTotal)}</div></div>
       </div>
-
-      <CategoryPieChart sales={monthSales} />
 
       <div style={{ ...styles.tableWrap, marginTop: 16 }}>
         <table style={styles.table}>
-          <thead><tr><th style={styles.th}>เวลา</th><th style={styles.th}>ลูกค้า</th><th style={styles.th}>รายการ</th><th style={{ ...styles.th, textAlign: "right" }}>ยอดรวม</th><th style={{ ...styles.th, textAlign: "right" }}>กำไร</th></tr></thead>
+          <thead><tr><th style={styles.th}>เวลา</th><th style={styles.th}>ประเภท</th><th style={styles.th}>ลูกค้า</th><th style={styles.th}>รายการ</th><th style={{ ...styles.th, textAlign: "right" }}>ยอดรวม</th><th style={{ ...styles.th, textAlign: "center" }}>สถานะ</th></tr></thead>
           <tbody>
             {monthSales.map((s) => (
               <tr key={s.id} style={{ cursor: "pointer" }} onClick={() => onSelect(s)}>
                 <td style={styles.td}>{formatDateTime(s.timestamp)}</td>
+                <td style={styles.td}>
+                  {s.payType === "credit" ? <span style={{ color: "var(--amber)", fontWeight: 600 }}>📝 เงินเซ็น</span> : <span style={{ color: "var(--green-dark)" }}>💵 เงินสด</span>}
+                </td>
                 <td style={{ ...styles.td, color: "var(--ink-muted)" }}>{s.customerName || "-"}</td>
                 <td style={{ ...styles.td, color: "var(--ink-muted)" }}>{s.items.length} รายการ</td>
                 <td className="mono" style={{ ...styles.td, textAlign: "right", fontWeight: 500 }}>{CURRENCY(s.total)}</td>
-                <td className="mono" style={{ ...styles.td, textAlign: "right", color: "var(--amber)" }}>{CURRENCY(s.profit || 0)}</td>
+                <td style={{ ...styles.td, textAlign: "center" }}>
+                  {s.payType === "credit" && s.status === "unpaid" ? (
+                    <span style={{ background: "var(--amber-light)", color: "var(--amber)", padding: "2px 8px", borderRadius: 4, fontSize: 12, fontWeight: 600 }}>ค้างชำระ</span>
+                  ) : (
+                    <span style={{ background: "var(--green-light)", color: "var(--green-dark)", padding: "2px 8px", borderRadius: 4, fontSize: 12, fontWeight: 600 }}>ชำระแล้ว</span>
+                  )}
+                </td>
               </tr>
             ))}
-            {monthSales.length === 0 && <tr><td colSpan="5" style={{ ...styles.td, textAlign: "center", color: "var(--ink-muted)", padding: "28px 0" }}>ไม่มีรายการขายในเดือนนี้</td></tr>}
+            {monthSales.length === 0 && <tr><td colSpan="6" style={{ ...styles.td, textAlign: "center", color: "var(--ink-muted)", padding: "28px 0" }}>ไม่มีรายการขายในเดือนนี้</td></tr>}
           </tbody>
         </table>
       </div>
@@ -534,14 +509,16 @@ function HistoryView({ sales, todaysSales, todaysTotal, todaysProfit, onSelect }
   );
 }
 
-function CustomersView({ sales }) {
+function CustomersView({ sales, onPayOff }) {
   const now = new Date();
   const [viewMonth, setViewMonth] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
   const [selectedCustomer, setSelectedCustomer] = useState(null);
+
   const monthSales = sales.filter((s) => {
     const d = new Date(s.timestamp);
     return d.getFullYear() === viewMonth.getFullYear() && d.getMonth() === viewMonth.getMonth() && s.customerName && s.customerName.trim();
   });
+
   const isCurrentMonth = viewMonth.getFullYear() === now.getFullYear() && viewMonth.getMonth() === now.getMonth();
   const monthLabel = viewMonth.toLocaleDateString("th-TH", { month: "long", year: "numeric" });
   function shiftMonth(delta) { setViewMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1)); }
@@ -549,12 +526,19 @@ function CustomersView({ sales }) {
   const customerMap = {};
   monthSales.forEach((s) => {
     const key = s.customerName.trim();
-    if (!customerMap[key]) customerMap[key] = { name: key, total: 0, count: 0, sales: [] };
+    if (!customerMap[key]) customerMap[key] = { name: key, cashTotal: 0, creditUnpaid: 0, creditPaid: 0, total: 0, sales: [] };
+    
+    if (s.payType === "credit") {
+      if (s.status === "unpaid") customerMap[key].creditUnpaid += s.total;
+      else customerMap[key].creditPaid += s.total;
+    } else {
+      customerMap[key].cashTotal += s.total;
+    }
     customerMap[key].total += s.total;
-    customerMap[key].count += 1;
     customerMap[key].sales.push(s);
   });
-  const customers = Object.values(customerMap).sort((a, b) => b.total - a.total);
+
+  const customers = Object.values(customerMap).sort((a, b) => b.creditUnpaid - a.creditUnpaid || b.total - a.total);
 
   return (
     <div style={{ padding: "20px 28px 40px" }}>
@@ -566,29 +550,58 @@ function CustomersView({ sales }) {
 
       <div style={{ ...styles.tableWrap, marginTop: 16 }}>
         <table style={styles.table}>
-          <thead><tr><th style={styles.th}>ลูกค้า</th><th style={{ ...styles.th, textAlign: "right" }}>จำนวนบิล</th><th style={{ ...styles.th, textAlign: "right" }}>ยอดซื้อรวม</th></tr></thead>
+          <thead><tr><th style={styles.th}>ชื่อลูกค้า</th><th style={{ ...styles.th, textAlign: "right" }}>ซื้อเงินสด</th><th style={{ ...styles.th, textAlign: "right" }}>เงินเซ็น (ค้างชำระ)</th><th style={{ ...styles.th, textAlign: "right" }}>ยอดซื้อรวม</th><th style={styles.th}></th></tr></thead>
           <tbody>
             {customers.map((c) => (
               <tr key={c.name} style={{ cursor: "pointer" }} onClick={() => setSelectedCustomer(c)}>
-                <td style={styles.td}>{c.name}</td>
-                <td className="mono" style={{ ...styles.td, textAlign: "right" }}>{c.count}</td>
-                <td className="mono" style={{ ...styles.td, textAlign: "right", fontWeight: 500, color: "var(--green-dark)" }}>{CURRENCY(c.total)}</td>
+                <td style={{ ...styles.td, fontWeight: 600 }}>{c.name}</td>
+                <td className="mono" style={{ ...styles.td, textAlign: "right", color: "var(--green-dark)" }}>{CURRENCY(c.cashTotal)}</td>
+                <td className="mono" style={{ ...styles.td, textAlign: "right", color: c.creditUnpaid > 0 ? "var(--danger)" : "var(--ink-muted)", fontWeight: c.creditUnpaid > 0 ? 600 : 400 }}>{CURRENCY(c.creditUnpaid)}</td>
+                <td className="mono" style={{ ...styles.td, textAlign: "right", fontWeight: 500 }}>{CURRENCY(c.total)}</td>
+                <td style={{ ...styles.td, textAlign: "right" }}>
+                  {c.creditUnpaid > 0 && (
+                    <button onClick={(e) => { e.stopPropagation(); onPayOff(c.name); }} style={{ background: "var(--amber)", color: "#fff", border: "none", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>เคลียร์หนี้/จ่ายสิ้นเดือน</button>
+                  )}
+                </td>
               </tr>
             ))}
-            {customers.length === 0 && <tr><td colSpan="3" style={{ ...styles.td, textAlign: "center", color: "var(--ink-muted)", padding: "28px 0" }}>ไม่มีข้อมูลลูกค้าในเดือนนี้ (ต้องกรอกชื่อลูกค้าตอนรับชำระเงิน)</td></tr>}
+            {customers.length === 0 && <tr><td colSpan="5" style={{ ...styles.td, textAlign: "center", color: "var(--ink-muted)", padding: "28px 0" }}>ไม่มีข้อมูลลูกค้าในเดือนนี้</td></tr>}
           </tbody>
         </table>
       </div>
 
       {selectedCustomer && (
-        <Modal onClose={() => setSelectedCustomer(null)} title={selectedCustomer.name}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
-            <span style={{ fontSize: 13, color: "var(--ink-muted)" }}>ยอดซื้อรวมเดือนนี้ ({selectedCustomer.count} บิล)</span>
-            <span className="mono" style={{ fontSize: 18, fontWeight: 600, color: "var(--green-dark)" }}>{CURRENCY(selectedCustomer.total)}</span>
+        <Modal onClose={() => setSelectedCustomer(null)} title={`ประวัติการซื้อ: ${selectedCustomer.name}`}>
+          <div style={{ background: "var(--paper)", padding: 12, borderRadius: 8, marginBottom: 14, border: "1px solid var(--line)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 13, color: "var(--ink-muted)" }}>ยอดซื้อเงินสด</span>
+              <span className="mono" style={{ fontSize: 14, color: "var(--green-dark)" }}>{CURRENCY(selectedCustomer.cashTotal)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 13, color: "var(--ink-muted)" }}>ยอดค้างชำระ (เงินเซ็น)</span>
+              <span className="mono" style={{ fontSize: 14, color: "var(--danger)", fontWeight: 600 }}>{CURRENCY(selectedCustomer.creditUnpaid)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 6, borderTop: "1px dashed var(--line)" }}>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>ยอดซื้อรวมทั้งหมด</span>
+              <span className="mono" style={{ fontSize: 16, fontWeight: 600 }}>{CURRENCY(selectedCustomer.total)}</span>
+            </div>
           </div>
+
+          {selectedCustomer.creditUnpaid > 0 && (
+            <button onClick={() => { onPayOff(selectedCustomer.name); setSelectedCustomer(null); }} style={{ ...styles.primaryBtn, background: "var(--amber)", marginBottom: 16 }}>
+              รับชำระหนี้ทั้งหมด ({CURRENCY(selectedCustomer.creditUnpaid)})
+            </button>
+          )}
+
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>ประวัติบิลประจำเดือน</div>
           {selectedCustomer.sales.map((s) => (
             <div key={s.id} style={{ ...styles.receiptPaper, marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: "var(--ink-muted)", marginBottom: 6 }}>{formatDateTime(s.timestamp)}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: "var(--ink-muted)" }}>{formatDateTime(s.timestamp)}</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: s.payType === "credit" ? "var(--amber)" : "var(--green-dark)" }}>
+                  {s.payType === "credit" ? (s.status === "unpaid" ? "📝 เงินเซ็น (ค้างชำระ)" : "📝 เงินเซ็น (จ่ายแล้ว)") : "💵 เงินสด"}
+                </span>
+              </div>
               {s.items.map((it, idx) => (
                 <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
                   <span style={{ flex: 1 }}>{it.name} <span className="mono" style={{ color: "var(--ink-muted)" }}>×{it.qty}</span></span>
@@ -615,7 +628,11 @@ function ReceiptView({ sale }) {
         <div style={{ fontWeight: 600, fontSize: 15 }}>ร้านค้าของชำ</div>
         <div style={{ fontSize: 12, color: "var(--ink-muted)" }}>{formatDateTime(sale.timestamp)}</div>
       </div>
-      {sale.customerName && <div style={{ fontSize: 13, color: "var(--ink-muted)", marginBottom: 4 }}>ลูกค้า: <span style={{ color: "var(--ink)" }}>{sale.customerName}</span></div>}
+      <div style={{ fontSize: 13, marginBottom: 4 }}>
+        ประเภทการจ่าย: <strong>{sale.payType === "credit" ? "📝 เงินเซ็น (ลงบัญชี)" : "💵 เงินสด"}</strong>
+      </div>
+      {sale.customerName && <div style={{ fontSize: 13, color: "var(--ink-muted)", marginBottom: 4 }}>ลูกค้า: <span style={{ color: "var(--ink)", fontWeight: 600 }}>{sale.customerName}</span></div>}
+      
       <div style={{ borderTop: "1px dashed var(--line)", borderBottom: "1px dashed var(--line)", padding: "10px 0", margin: "8px 0" }}>
         {sale.items.map((it, idx) => (
           <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 5 }}>
@@ -625,12 +642,13 @@ function ReceiptView({ sale }) {
         ))}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 600, marginBottom: 4 }}><span>ยอดรวม</span><span className="mono">{CURRENCY(sale.total)}</span></div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ink-muted)" }}><span>รับเงินสด</span><span className="mono">{CURRENCY(sale.cash)}</span></div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ink-muted)" }}><span>เงินทอน</span><span className="mono">{CURRENCY(sale.change)}</span></div>
-      {typeof sale.profit === "number" && (
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--amber)", marginTop: 6, paddingTop: 6, borderTop: "0.5px dotted var(--line)" }}>
-          <span>กำไร (ดูภายในร้านเท่านั้น)</span><span className="mono">{CURRENCY(sale.profit)}</span>
-        </div>
+      {sale.payType === "cash" ? (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ink-muted)" }}><span>รับเงินสด</span><span className="mono">{CURRENCY(sale.cash)}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ink-muted)" }}><span>เงินทอน</span><span className="mono">{CURRENCY(sale.change)}</span></div>
+        </>
+      ) : (
+        <div style={{ textAlign: "right", fontSize: 12, color: "var(--amber)", fontWeight: 600, marginTop: 4 }}>* รอตะหนี้ชำระเงินสิ้นเดือน *</div>
       )}
     </div>
   );
@@ -776,7 +794,6 @@ const styles = {
   td: { padding: "12px 16px", fontSize: 13.5, borderBottom: "0.5px solid var(--line)", verticalAlign: "middle" },
   summaryRow: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px,1fr))", gap: 12, marginBottom: 16, maxWidth: 640 },
   summaryCard: { background: "var(--paper)", border: "0.5px solid var(--line)", borderRadius: 10, padding: "14px 18px" },
-  chartContainer: { background: "var(--paper)", border: "0.5px solid var(--line)", borderRadius: 10, padding: "18px 20px", maxWidth: 640, marginBottom: 16 },
   monthNav: { display: "flex", alignItems: "center", gap: 14, marginTop: 8 },
   monthNavBtn: { width: 32, height: 32, borderRadius: 8, border: "0.5px solid var(--line)", background: "var(--paper)", color: "var(--ink)", fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center" },
   overlay: { position: "fixed", inset: 0, background: "rgba(30,26,18,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 },
