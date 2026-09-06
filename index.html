@@ -3,22 +3,29 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>ร้านค้าของชำ - ระบบขายหน้าร้าน</title>
+<title>ร้านค้าของชำ - ระบบขายหน้าร้าน (IndexedDB)</title>
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#3F6C34" />
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
+
+<!-- React & Babel -->
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.26.0/babel.min.js"></script>
+
+<!-- localForage สำหรับจัดการ IndexedDB (ถ้าต้องการออฟไลน์ 100% สามารถโหลดไฟล์นี้มาไว้ในเครื่องได้) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
+
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
   :root {
     --cream: #FAF7F1; --paper: #FFFFFF; --ink: #2A2A22; --ink-muted: #7A7566;
     --green: #3F6C34; --green-dark: #2C4D24; --green-light: #E9EFE2;
     --amber: #C97A2E; --amber-light: #FBEEDF; --line: #E4DFD1; --danger: #B14539;
+    --blue: #2B6CB0; --blue-light: #EBF8FF;
   }
   * { box-sizing: border-box; font-family: 'Sarabun', sans-serif; margin: 0; padding: 0; }
   body { background: var(--cream); }
@@ -36,24 +43,13 @@
 
 const { useState, useEffect, useMemo, useRef } = React;
 
+// ตั้งค่า localForage ให้ใช้ IndexedDB
+localforage.config({
+  name: 'GroceryPOSDB',
+  storeName: 'pos_store'
+});
+
 const CURRENCY = (n) => "฿" + Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-const CATEGORY_COLORS = [
-  "#3F6C34", "#C97A2E", "#2B6CB0", "#D69E2E", "#805AD5",
-  "#DD6B20", "#319795", "#E53E3E", "#D69E2E", "#4A5568"
-];
-
-function Icon({ path, size = 16, color = "currentColor" }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{path}</svg>;
-}
-const IconSearch = (p) => <Icon {...p} path={<><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></>} />;
-const IconPlus = (p) => <Icon {...p} path={<><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></>} />;
-const IconMinus = (p) => <Icon {...p} path={<line x1="5" y1="12" x2="19" y2="12" />} />;
-const IconTrash = (p) => <Icon {...p} path={<><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /></>} />;
-const IconX = (p) => <Icon {...p} path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} />;
-const IconPencil = (p) => <Icon {...p} path={<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />} />;
-const IconAlert = (p) => <Icon {...p} path={<><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" /><line x1="12" y1="17" x2="12.01" y2="17" /></>} />;
-const IconImage = (p) => <Icon {...p} path={<><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></>} />;
 
 const SEED_PRODUCTS = [
   { id: "p1", name: "ข้าวสารหอมมะลิ 5 กก.", price: 145, cost: 120, stock: 20, unit: "ถุง", barcode: "8850001000015", category: "ข้าวของแห้ง", image: "" },
@@ -71,44 +67,110 @@ function isSameDay(ts, ref) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-function loadLocal(key, fallback) {
-  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; }
+function Icon({ path, size = 16, color = "currentColor" }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{path}</svg>;
 }
-function saveLocal(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
-}
+const IconSearch = (p) => <Icon {...p} path={<><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></>} />;
+const IconPlus = (p) => <Icon {...p} path={<><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></>} />;
+const IconMinus = (p) => <Icon {...p} path={<line x1="5" y1="12" x2="19" y2="12" />} />;
+const IconTrash = (p) => <Icon {...p} path={<><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /></>} />;
+const IconX = (p) => <Icon {...p} path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} />;
+const IconPencil = (p) => <Icon {...p} path={<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />} />;
+const IconAlert = (p) => <Icon {...p} path={<><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" /><line x1="12" y1="17" x2="12.01" y2="17" /></>} />;
+const IconImage = (p) => <Icon {...p} path={<><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></>} />;
+const IconDownload = (p) => <Icon {...p} path={<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></>} />;
+const IconUpload = (p) => <Icon {...p} path={<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></>} />;
 
 function App() {
   const [tab, setTab] = useState("sell");
-  const [products, setProducts] = useState(() => loadLocal("pos_products", SEED_PRODUCTS));
-  const [sales, setSales] = useState(() => loadLocal("pos_sales", []));
+  const [products, setProducts] = useState([]);
+  const [sales, setSales] = useState([]);
+  const [isLoaded, setIsLoaded] = useState(false);
+  
   const [cart, setCart] = useState([]);
   const [query, setQuery] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
-  const [payType, setPayType] = useState("cash"); // 'cash' หรือ 'credit'
+  const [payType, setPayType] = useState("cash");
   const [cashInput, setCashInput] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [lastReceipt, setLastReceipt] = useState(null);
   const [productModal, setProductModal] = useState(null);
   const [historyDetail, setHistoryDetail] = useState(null);
   const [toast, setToast] = useState(null);
+  const fileImportRef = useRef(null);
 
-  useEffect(() => { saveLocal("pos_products", products); }, [products]);
-  useEffect(() => { saveLocal("pos_sales", sales); }, [sales]);
+  // โหลดข้อมูลจาก IndexedDB ตอนเริ่มต้น
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const p = await localforage.getItem("pos_products");
+        const s = await localforage.getItem("pos_sales");
+        setProducts(p && p.length > 0 ? p : SEED_PRODUCTS);
+        setSales(s || []);
+      } catch (err) {
+        console.error("Error loading IndexedDB:", err);
+      } finally {
+        setIsLoaded(true);
+      }
+    }
+    loadData();
+  }, []);
+
+  // บันทึกลง IndexedDB เมื่อข้อมูลมีการเปลี่ยนแปลง
+  useEffect(() => { if (isLoaded) localforage.setItem("pos_products", products); }, [products, isLoaded]);
+  useEffect(() => { if (isLoaded) localforage.setItem("pos_sales", sales); }, [sales, isLoaded]);
 
   function showToast(msg) { setToast(msg); setTimeout(() => setToast(null), 2000); }
 
+  // ส่งออกข้อมูลเป็นไฟล์ JSON (Backup)
+  function exportBackup() {
+    const data = { products, sales, exportedAt: new Date().toISOString() };
+    const jsonStr = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `POS_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("สำรองข้อมูลเรียบร้อยแล้ว");
+  }
+
+  // นำเข้าข้อมูลจากไฟล์ JSON (Restore)
+  function importBackup(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const data = JSON.parse(event.target.result);
+        if (data.products && data.sales) {
+          if (confirm("การนำเข้าข้อมูลจะเขียนทับข้อมูลปัจจุบัน คุณแน่ใจหรือไม่?")) {
+            setProducts(data.products);
+            setSales(data.sales);
+            await localforage.setItem("pos_products", data.products);
+            await localforage.setItem("pos_sales", data.sales);
+            showToast("นำเข้าข้อมูลสำเร็จแล้ว");
+          }
+        } else {
+          alert("รูปแบบไฟล์สำรองไม่ถูกต้อง");
+        }
+      } catch (err) {
+        alert("อ่านไฟล์ไม่สำเร็จ ไฟล์อาจเสียหาย");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
   function resetAllData() {
-    const confirm1 = confirm("⚠️ เตือน: คุณต้องการลบข้อมูลทั้งหมดในแอปใช่หรือไม่?\n(สินค้า ประวัติการขาย และข้อมูลลูกค้าจะหายทั้งหมด)");
-    if (confirm1) {
-      const confirm2 = prompt("เพื่อความแน่ใจ กรุณาพิมพ์คำว่า \"DELETE\" เพื่อยืนยันการลบข้อมูลทั้งหมด:");
+    if (confirm("⚠️ คุณต้องการลบข้อมูลทั้งหมดในระบบใช่หรือไม่?")) {
+      const confirm2 = prompt("พิมพ์คำว่า \"DELETE\" เพื่อยืนยันการลบ:");
       if (confirm2 === "DELETE" || confirm2 === "delete") {
-        localStorage.removeItem("pos_products");
-        localStorage.removeItem("pos_sales");
-        alert("ลบข้อมูลเรียบร้อยแล้ว แอปจะทำการรีโหลด");
-        window.location.reload();
-      } else if (confirm2 !== null) {
-        alert("คำยืนยันไม่ถูกต้อง ยกเลิกการลบข้อมูล");
+        localforage.clear().then(() => {
+          alert("ลบข้อมูลทั้งหมดเรียบร้อย");
+          window.location.reload();
+        });
       }
     }
   }
@@ -160,16 +222,13 @@ function App() {
   function openCheckout() { if (cart.length === 0) return; setPayType("cash"); setCashInput(""); setCustomerName(""); setCheckoutOpen(true); }
 
   function confirmCheckout() {
-    if (payType === "credit" && !customerName.trim()) {
-      return showToast("ระบุชื่อลูกค้าสำหรับลงบัญชีเงินเซ็น");
-    }
+    if (payType === "credit" && !customerName.trim()) return showToast("ระบุชื่อลูกค้าสำหรับลงบัญชีเงินเซ็น");
     const cash = payType === "cash" ? parseFloat(cashInput) : 0;
     if (payType === "cash" && (isNaN(cash) || cash < cartTotal)) return showToast("จำนวนเงินไม่พอ");
 
     const sale = {
       id: uid("s"), timestamp: Date.now(), customerName: customerName.trim(),
-      payType: payType, // 'cash' หรือ 'credit'
-      status: payType === "credit" ? "unpaid" : "paid", // 'paid' หรือ 'unpaid'
+      payType: payType, status: payType === "credit" ? "unpaid" : "paid",
       items: cart.map((i) => ({ id: i.id, name: i.name, price: i.price, cost: i.cost || 0, qty: i.qty, unit: i.unit, category: i.category || "อื่นๆ" })),
       total: cartTotal, profit: cart.reduce((sum, i) => sum + (i.price - (i.cost || 0)) * i.qty, 0),
       cash: payType === "cash" ? cash : 0, change: payType === "cash" ? cash - cartTotal : 0,
@@ -217,14 +276,16 @@ function App() {
   const today = Date.now();
   const todaysSales = sales.filter((s) => isSameDay(s.timestamp, today));
 
+  if (!isLoaded) return <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", color: "var(--ink-muted)" }}>กำลังโหลดฐานข้อมูล IndexedDB...</div>;
+
   return (
     <div style={styles.app}>
       <header style={styles.header}>
         <div style={styles.headerLeft}>
           <div style={styles.logoMark}>ร้าน</div>
           <div>
-            <div style={{ fontWeight: 600, fontSize: 17, color: "var(--ink)" }}>ร้านค้าของชำ</div>
-            <div style={{ fontSize: 12, color: "var(--ink-muted)" }}>ระบบขายหน้าร้าน</div>
+            <div style={{ fontWeight: 600, fontSize: 17, color: "var(--ink)" }}>ร้านค้าของชำ <span style={{ fontSize: 11, background: "var(--green-light)", color: "var(--green-dark)", padding: "2px 6px", borderRadius: 4 }}>IndexedDB</span></div>
+            <div style={{ fontSize: 12, color: "var(--ink-muted)" }}>ระบบขายหน้าร้านออฟไลน์</div>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -234,7 +295,12 @@ function App() {
             <TabButton active={tab === "history"} onClick={() => setTab("history")} label="ประวัติการขาย" />
             <TabButton active={tab === "customers"} onClick={() => setTab("customers")} label="เงินเซ็น/ลูกค้า" />
           </nav>
-          <button onClick={resetAllData} style={styles.resetBtn}>ล้างข้อมูลแอป</button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={exportBackup} style={styles.backupBtn} title="สำรองข้อมูลเป็นไฟล์"><IconDownload size={14} /> สำรองข้อมูล</button>
+            <button onClick={() => fileImportRef.current.click()} style={styles.backupBtn} title="นำเข้าข้อมูลจากไฟล์"><IconUpload size={14} /> นำเข้า</button>
+            <input ref={fileImportRef} type="file" accept=".json" onChange={importBackup} style={{ display: "none" }} />
+            <button onClick={resetAllData} style={styles.resetBtn}>ล้างข้อมูล</button>
+          </div>
         </div>
       </header>
 
@@ -332,7 +398,7 @@ function App() {
             <button onClick={() => setPayType("credit")} style={{ flex: 1, padding: "10px", borderRadius: 8, border: payType === "credit" ? "2px solid var(--amber)" : "1px solid var(--line)", background: payType === "credit" ? "var(--amber-light)" : "#fff", fontWeight: 600, color: payType === "credit" ? "var(--amber)" : "var(--ink)" }}>📝 เงินเซ็น (ลงบัญชี)</button>
           </div>
 
-          <label style={styles.fieldLabel}>ชื่อลูกค้า {payType === "credit" && <span style={{ color: "var(--danger)" }}>*จำจำเป็นต้องใส่</span>}</label>
+          <label style={styles.fieldLabel}>ชื่อลูกค้า {payType === "credit" && <span style={{ color: "var(--danger)" }}>*จำเป็นต้องใส่</span>}</label>
           <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder={payType === "credit" ? "ระบุชื่อลูกค้า เช่น คุณสมชาย" : "ระบุชื่อลูกค้า (ไม่บังคับ)"} style={styles.modalInput} />
 
           {payType === "cash" && (
@@ -671,7 +737,7 @@ function ProductModal({ modal, onClose, onSave, onDelete }) {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        const maxDim = 500;
+        const maxDim = 400; // บีบอัดรูปภาพให้เล็กเพื่อประหยัดพื้นที่
         let w = img.width, h = img.height;
         if (w > h) { if (w > maxDim) { h *= maxDim / w; w = maxDim; } }
         else { if (h > maxDim) { w *= maxDim / h; h = maxDim; } }
@@ -680,7 +746,7 @@ function ProductModal({ modal, onClose, onSave, onDelete }) {
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, w, h);
         
-        const compressedBase64 = canvas.toDataURL("image/jpeg", 0.82);
+        const compressedBase64 = canvas.toDataURL("image/jpeg", 0.7);
         set("image", compressedBase64);
         setError("");
       };
@@ -766,7 +832,8 @@ const styles = {
   headerLeft: { display: "flex", alignItems: "center", gap: 12 },
   logoMark: { width: 38, height: 38, borderRadius: 8, background: "var(--green)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600 },
   tabs: { display: "flex", gap: 4, background: "var(--green-light)", padding: 4, borderRadius: 10 },
-  resetBtn: { background: "transparent", color: "var(--danger)", border: "0.5px solid var(--danger)", borderRadius: 8, padding: "7px 12px", fontSize: 12.5, fontWeight: 500 },
+  backupBtn: { background: "var(--paper)", color: "var(--blue)", border: "0.5px solid var(--blue)", borderRadius: 8, padding: "7px 10px", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 },
+  resetBtn: { background: "transparent", color: "var(--danger)", border: "0.5px solid var(--danger)", borderRadius: 8, padding: "7px 10px", fontSize: 12, fontWeight: 500 },
   sellLayout: { display: "flex", gap: 0, alignItems: "flex-start", flexWrap: "wrap" },
   sellMain: { flex: 1, padding: "20px 20px 40px 28px", minWidth: 280 },
   searchRow: { display: "flex", alignItems: "center", gap: 10, background: "var(--paper)", border: "0.5px solid var(--line)", borderRadius: 10, padding: "11px 16px", marginBottom: 18 },
